@@ -1,3 +1,7 @@
+*_cache/
+outputs/
+HWSD_vs1_21
+
 .R*
 *.Rproj
 *.mdb
@@ -5,3 +9,4 @@
 *.zip
 
 *.rtf
+.Rproj.user
