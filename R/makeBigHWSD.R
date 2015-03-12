@@ -3,9 +3,9 @@
 #       Major revisions: 4 Febuary 2013
 #       Revised and commented, 23 April 2013
 #       Expanded to full resolution and error analysis added
-##Purpose: Load HWSD soil carbon density to R format
-##Prep: Download HWSD_RASTER.zip (20.7 MB) and HWSD.mdb (46.8 MB) from HWSD data webpage
-#       Convert HWSD.mdb file to HWSD.sqlite (12.6 MB) using MDB Explorer
+##Purpose: Load HWSD soil carbon density to R format and calculate a nieve SD
+##Prep: Download HWSD_RASTER.zip (20.7 MB) and HWSD.mdb (46.8 MB) from HWSD data webpage http://webarchive.iiasa.ac.at/Research/LUC/External-World-soil-database/HTML/
+#       Convert HWSD.mdb file to HWSD.sqlite (12.6 MB) using MDB Explorer or something similar
 library(compiler)
 library(raster) ##Deal with spatial maps nicely
 library(RSQLite) ##Load the atribute database
