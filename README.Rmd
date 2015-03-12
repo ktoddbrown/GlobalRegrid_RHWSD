@@ -1,19 +1,21 @@
 ---
-title: "Processing HWSD in R"
+title: "Processing HWSD in R to generate global maps"
 author: "K Todd-Brown (ktoddbrown@gmail.com)"
 date: "March 12, 2015"
 output: html_document
 ---
 
-I have recieved several requests to provide soil carbon maps based on the Harmonized World Soil Database in a R-friendly format. I have avoided providing these data products because I did not collect the data nor create the data product and feel that any data I provided may be out of date and does a dis-service to the fantastic science team who did. However there is a clear need in the community for a code base to work with this data product. As a result I've created this repository to walk through my most recent iteration of how I process the HWSD to create a global soil carbon map. This work was based off of Rossiter, D. G. (2012). Processing the Harmonized World Soil Database (Version 1.2) in R. Institute of Soil Science, Chinese Academy of Sciences.
+Soil carbon values extracted from the Harmonized World Soil Database are at too fine a resolution to work with for most global analysis. This repository goes through and regrids the soil organic carbon and bulk density maps from the HWSD to a 1x1 degree resolution using R. An additional regridded version of HWSD can be found http://daac.ornl.gov/SOILS/guides/HWSD.html 
 
-Date can be downloaded (here)[http://webarchive.iiasa.ac.at/Research/LUC/External-World-soil-database/HTML/] and will need to be converted from the Mircosoft Access format it is orginally delivered in to a sql format using MDB Explorer, MDBLite or something similar.
+This work was based off of Rossiter, D. G. (2012). Processing the Harmonized World Soil Database (Version 1.2) in R. Institute of Soil Science, Chinese Academy of Sciences.
+
+Date can be downloaded http://webarchive.iiasa.ac.at/Research/LUC/External-World-soil-database/HTML/ and will need to be converted from the Mircosoft Access (mdb) format it is orginally delivered in to a SQL (sqlite) format using MDBExplorer, MDBLite or something similar.
 
 First let's set up the libraries.
 ```{r setUp}
-library(compiler)##pre-compile library to make some functions faster
-library(raster) ##Deal with spatial maps nicely
-library(RSQLite) ##Load the atribute database
+library(compiler) ##pre-compile library to make some functions faster
+library(raster)   ##Deal with spatial maps nicely
+library(RSQLite)  ##Load the atribute database
 
 source('R/lookUp.R')
 ```
@@ -33,7 +35,7 @@ cat(format(Sys.time(), '%H:%M:%OS3'), 'starting load attributes...\n')
 m <- dbDriver("SQLite")
 ##HWSD.sqlite created from .mdb using MDB Explorer
 ##...load into database
-con <- dbConnect(m, dbname = "HWSD_vs1_21/HWSD.sqlite") #12.6 MB
+con <- dbConnect(m, dbname = "HWSD_vs1_21/HWSD.sqlite") #10.6 MB
 
 ##Inform the user of what we have
 cat('List of available tables:\n')
@@ -52,10 +54,6 @@ colNames.data <- c('ID', 'MU_GLOBAL', 'ISSOIL',  'REF_DEPTH',
 ##...pull so we can see what type of soil are have
 colNames.smu <- c('ID', 'MU_GLOBAL', 'SU_SYMBOL', 'SU_CODE')
 
-##Debugging comments, peak at the start of the tables
-#tmp1 <- dbGetQuery(con, paste("select", paste(colNames.data, collapse = ", "),"from HWSD_DATA limit 10"))
-#tmp2 <- dbGetQuery(con, paste("select", paste(colNames.smu, collapse = ", "), "from HWSD_SMU limit 10"))
-
 ##Pull the tables we are interested in
 dataTable <- dbGetQuery(con, paste("select", paste(colNames.data, collapse = ", "), "from HWSD_DATA"))
 smu.table <- dbGetQuery(con, paste("select", paste(colNames.smu, collapse = ", "), "from HWSD_SMU"))
@@ -63,22 +61,21 @@ smu.table <- dbGetQuery(con, paste("select", paste(colNames.smu, collapse = ", "
 cat('process dataTable:', format(Sys.time(), '%H:%M:%OS3'), '...')
 vapplyWrapper <- cmpfun(function (soilID){
   return(vapply(soilID, FUN=function(x){c(x, lookUp(x))}, 
-                FUN.VALUE=rep(0, times=5), USE.NAMES=FALSE))}) ##streight up complied vapply, this is the one used
+                FUN.VALUE=rep(0, times=3), USE.NAMES=FALSE))}) ##streight up complied vapply, this is the one used
 
 shortDataTable <- vapplyWrapper(unique(dataTable$MU_GLOBAL))
-#	shortDataTable <- vapply(dataTable$MU_GLOBAL, FUN=lookUp, FUN.VALUE=rep(0, length=5), USE.NAMES=FALSE, refTable=dataTable) #precompiling thsi would be faster
 
 shortDataTable  <- data.frame(t(shortDataTable))
-names(shortDataTable) <- c('MU', 'bulk', 'bulk_sd', 'soc', 'soc_sd')
-shortDataTable <- rbind(c(0, rep(NA, length=4)), shortDataTable)
-shortDataTable <- rbind(rep(NA, length=5), shortDataTable)
+names(shortDataTable) <- c('MU', 'bulk', 'soc')
+shortDataTable <- rbind(c(0, rep(NA, length=2)), shortDataTable)
+shortDataTable <- rbind(rep(NA, length=3), shortDataTable)
 cat(format(Sys.time(), '%H:%M:%OS3'), 'done\n')
 ```
 
 Then process the raster in chuncks to connect the identifier to bulk density and soil organic carbon.
 ```{r regridRaster, cache=TRUE}
-bd_file <- 'fullBulkDensity.grd'
-soc_file <- 'fullSOC.grd'
+bd_file <- 'outputs/fullBulkDensity.grd'
+soc_file <- 'outputs/fullSOC.grd'
 
 bulk <- raster(hwsd)
 soc <- raster(hwsd)
@@ -107,14 +104,22 @@ writeStop(soc)
 cat(format(Sys.time(), '%H:%M:%OS3'), 'done\n')
 ```
 
-Finally, regrid everything to a 1 degree grid cell via area averaging. Note that there are several ways to do this regridding and no real agreed upon method. However using a interpolation method to cross several orders of magnitude in grid size is generally not recommended. An alternate method might include aggregating the grid cell before assigning the bulk densith and soil organic carbon by assigning the dominate soil identifier to each new grid cell.
+Finally, regrid everything to a 1x1 degree grid cell via area averaging. Note that there are several ways to do this regridding and no real agreed upon method. However using a interpolation method to cross several orders of magnitude in grid size is generally not recommended. An alternate method might include aggregating the grid cell before assigning the bulk densith and soil organic carbon by assigning the dominate soil identifier to each new grid cell. You are encouraged to use your best scientific judgement in this matter.
 
 ```{r regrid, cache=TRUE}
 bulk <- raster(bd_file)
 soc <- raster(soc_file)
 
-bulk.regrid <- aggregate(bulk, fact=120, fun=mean, filename='bulk_area1deg.grd')
-soc.regrid <- aggregate(soc, fact=120, fun=mean, filename='soc_area1deg.grd')
+bulk.regrid <- aggregate(bulk, fact=120, fun=mean, filename='outputs/bulk_area1deg.grd')
+soc.regrid <- aggregate(soc, fact=120, fun=mean, filename='outputs/soc_area1deg.grd')
 
-writeRaster(soc.regrid, filename='HWSD_1deg.nc', varname='SOC', varunit='kg m^-2', longname='Area weighted soil organic carbon from HWSD')
+writeRaster(soc.regrid, filename='outputs/HWSD_1deg.nc', varname='SOC', varunit='kg m^-2', longname='Area weighted soil organic carbon from HWSD')
+```
+
+```{r visualize, fig.width=10, fig.height=8, cache=TRUE}
+par(mfrow=c(2,2))
+plot(soc, main='SOC on orginal grid')
+plot(soc.regrid, main='SOC on 1 degree grid')
+plot(bulk, main='Bulk density on orginal grid')
+plot(bulk.regrid, main='Bulk density on 1 degree grid')
 ```
