@@ -5,7 +5,7 @@ date: "March 12, 2015"
 output: html_document
 ---
 
-Soil carbon values extracted from the Harmonized World Soil Database are at too fine a resolution to work with for most global analysis. This repository goes through and regrids the soil organic carbon and bulk density maps from the HWSD to a 1x1 degree resolution using R. An additional regridded version of HWSD can be found http://daac.ornl.gov/SOILS/guides/HWSD.html 
+Soil carbon values extracted from the Harmonized World Soil Database are at too fine a resolution to work with for most global analysis. This repository goes through and regrids the soil organic carbon and bulk density maps from the HWSD to a 1x1 degree resolution using R. An additional regridded version of HWSD can be found http://daac.ornl.gov/SOILS/guides/HWSD.html (unrelated to this repo) and there is a R package that can be found here https://github.com/dlebauer/rhwsd (also unrelated to this repo).
 
 This work was based off of Rossiter, D. G. (2012). Processing the Harmonized World Soil Database (Version 1.2) in R. Institute of Soil Science, Chinese Academy of Sciences.
 
