@@ -1,5 +1,7 @@
 *_cache/
 outputs/
+private
+*_files
 HWSD_vs1_21
 
 .R*
