@@ -104,7 +104,7 @@ writeStop(soc)
 cat(format(Sys.time(), '%H:%M:%OS3'), 'done\n')
 ```
 
-Finally, regrid everything to a 1x1 degree grid cell via area averaging. Note that there are several ways to do this regridding and no real agreed upon method. However using a interpolation method to cross several orders of magnitude in grid size is generally not recommended. An alternate method might include aggregating the grid cell before assigning the bulk densith and soil organic carbon by assigning the dominate soil identifier to each new grid cell. You are encouraged to use your best scientific judgement in this matter.
+Finally, regrid everything to a 1x1 degree grid cell via area averaging. Note that there are several ways to do regridding and no real agreed upon method. However using a interpolation method to cross several orders of magnitude in grid size is generally not recommended. An alternate method might include aggregating the grid cell by most common type before assigning the bulk densith and soil organic carbon. You are encouraged to use your best scientific judgement in this matter.
 
 ```{r regrid, cache=TRUE}
 bulk <- raster(bd_file)
