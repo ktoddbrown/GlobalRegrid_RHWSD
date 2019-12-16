@@ -1,0 +1,30 @@
+---
+title: "Read HWSD native"
+author: "K Todd-Brown"
+date: "12/16/2019"
+output: html_document
+---
+
+```{r setUp}
+#install from terminal: brew install mdbtools
+library(Hmisc)
+library(tidyverse)
+#Download HWSD files to ./data/ folder
+```
+
+
+```{r loadRaster}
+##Load the raster
+hwsd <- raster("data/hwsd.bil") #1.87 GB or HWSD_RASTER.zip MB
+(proj4string(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
+newproj <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
+
+hwsd_rat <- ratify(hwsd)
+```
+
+```{r}
+HWSD_mdb <- mdb.get('data/HWSD.mdb')
+
+datakey <- HWSD_mdb$HWSD_DATA %>%
+  select(ID, MU.GLOBAL, T.BULK.DENSITY, T.OC, S.BULK.DENSITY, S.OC)
+```
