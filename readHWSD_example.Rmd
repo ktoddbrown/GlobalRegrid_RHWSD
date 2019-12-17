@@ -6,25 +6,56 @@ output: html_document
 ---
 
 ```{r setUp}
-#install from terminal: brew install mdbtools
+#install from terminal the Access database tools for the Mac OS... not sure about Windows OS:> brew install mdbtools
 library(Hmisc)
 library(tidyverse)
-#Download HWSD files to ./data/ folder
+library(raster)
 ```
 
 
 ```{r loadRaster}
+#Download HWSD files to ./data/ folder from 
+#http://webarchive.iiasa.ac.at/Research/LUC/External-World-soil-database/HTML/
+#Select the 'Download Data Only' from the left hand menu
+#this script assumes everything is thrown into a single folder called 'data' and unzips all relevant archives
 ##Load the raster
 hwsd <- raster("data/hwsd.bil") #1.87 GB or HWSD_RASTER.zip MB
-(proj4string(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
-newproj <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
-
 hwsd_rat <- ratify(hwsd)
 ```
 
+Pattern after http://ncss-tech.github.io/AQP/soilDB/gSSURGO-SDA.html
 ```{r}
 HWSD_mdb <- mdb.get('data/HWSD.mdb')
 
+#HWSD_mdb$HWSD_SMU %>%
+#  select(ID, MU.GLOBAL, SU.SYMBOL, SU.CODE) %>% head
+
 datakey <- HWSD_mdb$HWSD_DATA %>%
-  select(ID, MU.GLOBAL, T.BULK.DENSITY, T.OC, S.BULK.DENSITY, S.OC)
+  #filter(MU.GLOBAL == 2) %>%
+  dplyr::select(ID, MU.GLOBAL, SHARE, ISSOIL, T.BULK.DENSITY, T.OC, S.BULK.DENSITY, S.OC, REF.DEPTH) %>%
+  dplyr::mutate(S.REF.DEPTH = if_else(REF.DEPTH > 30, as.numeric(REF.DEPTH - 30), as.numeric(0))/100,
+                T.REF.DEPTH = pmin(REF.DEPTH, 30)/100,
+                SoilFrac = as.numeric(ISSOIL * SHARE/100),
+                T.BD = (as.numeric(T.BULK.DENSITY) * 1e3), #convert kg/dm3 to kg/m3
+                S.BD = (as.numeric(S.BULK.DENSITY) * 1e3),
+                T.OC = as.numeric(T.OC)/100, #convert from percent to fraction
+                S.OC = as.numeric(S.OC)/100) %>%#convert from percent to fraction
+  rename('data_id' = 'ID') %>%
+  rename('ID' = 'MU.GLOBAL') %>%
+  group_by(ID) %>%
+  summarise(SOC_top.kg_per_m2 = sum(SoilFrac * T.REF.DEPTH * T.BD * T.OC, na.rm=TRUE), 
+          SOC_sub.kg_per_m2 = sum(SoilFrac * S.REF.DEPTH * S.BD * S.OC, na.rm=TRUE)
+  ) %>%
+  right_join(levels(hwsd_rat)[[1]], by='ID') %>%
+  mutate(ID = as.integer(ID))
+
+write.csv(datakey, file='output/SOC_by_ID.csv', row.names = FALSE)
+head(datakey)
+```
+
+```{r}
+
+#levels(hwsd_rat) <- list(as.data.frame(datakey))
+#r_new <- deratify(hwsd_rat, att = 'SOC_top.kg_per_m2')
+#plot(hwsd_rat)
 ```
