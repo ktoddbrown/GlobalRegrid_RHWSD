@@ -1,7 +1,7 @@
 ---
 title: "Processing HWSD in R to generate global maps"
 author: "K Todd-Brown (ktoddbrown@gmail.com)"
-date: "March 12, 2015"
+date: "April 14 2021"
 output: html_document
 ---
 
@@ -9,117 +9,52 @@ Soil carbon values extracted from the Harmonized World Soil Database are at too 
 
 This work was based off of Rossiter, D. G. (2012). Processing the Harmonized World Soil Database (Version 1.2) in R. Institute of Soil Science, Chinese Academy of Sciences.
 
-Date can be downloaded http://webarchive.iiasa.ac.at/Research/LUC/External-World-soil-database/HTML/ and will need to be converted from the Mircosoft Access (mdb) format it is orginally delivered in to a SQL (sqlite) format using MDBExplorer, MDBLite or something similar.
+These scripts will download and set up the libraries.
 
 First let's set up the libraries.
 ```{r setUp}
-library(compiler) ##pre-compile library to make some functions faster
-library(raster)   ##Deal with spatial maps nicely
-library(RSQLite)  ##Load the atribute database
+library(tidyverse)
+library(Hmisc)
+library(raster)
 
-source('R/lookUp.R')
+source('R/accessHWSD.R')
+source('R/makeSOC.R')
+
 ```
 
 First read in the raster that gives the soil identifier for each grid point.
-```{r loadRaster}
-##Load the raster
-hwsd <- raster("HWSD_vs1_21/HWSD_RASTER/hwsd.bil") #1.87 GB or HWSD_RASTER.zip MB
-(proj4string(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0")
-newproj <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
+```{r loadRaster, warning=FALSE}
+HWSD <- accessHWSD(downloadFolder = 'temp')
+
+map_lowres <- raster::aggregate(HWSD$raster, fact = 120, fun = modal)
+soc_map <- makeSOC(map_lowres, HWSD$db, verbose=TRUE)
+#soc_map <- makeSOC(HWSD$raster, HWSD$db, verbose=TRUE)
+
+gridSize <- as.data.frame(area(soc_map), xy = TRUE) %>% 
+  rename('grid_area_km2' = 'layer')
 ```
 
-Next read in the soil carbon attributes of all soil identifies.
-```{r loadAttributes, cache=TRUE}
-cat(format(Sys.time(), '%H:%M:%OS3'), 'starting load attributes...\n')
-##Load the atribute database
-m <- dbDriver("SQLite")
-##HWSD.sqlite created from .mdb using MDB Explorer
-##...load into database
-con <- dbConnect(m, dbname = "HWSD_vs1_21/HWSD.sqlite") #10.6 MB
-
-##Inform the user of what we have
-cat('List of available tables:\n')
-print(dbListTables(con)) ##list the tables
-cat('HWSD_DATA table structure\n')
-print(dbGetQuery(con, "pragma table_info(HWSD_DATA)")$name)
 
 
-##What entries we are interested in from the HWSD_DATA
-##...pull for the density and OC info
-colNames.data <- c('ID', 'MU_GLOBAL', 'ISSOIL',  'REF_DEPTH',
-                   'T_REF_BULK_DENSITY', 'S_REF_BULK_DENSITY',
-                   'T_BULK_DENSITY', 'S_BULK_DENSITY',
-                   'T_OC', 'S_OC', 'SHARE')
-##What entries we are interested in from the HWSD_SMU
-##...pull so we can see what type of soil are have
-colNames.smu <- c('ID', 'MU_GLOBAL', 'SU_SYMBOL', 'SU_CODE')
+```{r}
+data.df <- as.data.frame(soc_map, xy=TRUE) %>%
+  full_join(gridSize, by = c('x', 'y'))
 
-##Pull the tables we are interested in
-dataTable <- dbGetQuery(con, paste("select", paste(colNames.data, collapse = ", "), "from HWSD_DATA"))
-smu.table <- dbGetQuery(con, paste("select", paste(colNames.smu, collapse = ", "), "from HWSD_SMU"))
+ggplot(data.df) +
+  geom_raster(aes(x=x, y=y, fill=hwsd_SOC_top.kg_per_m2)) +
+  guides(fill = guide_legend(title = "SOC, 0-30cm [kg m-2]"))
 
-cat('process dataTable:', format(Sys.time(), '%H:%M:%OS3'), '...')
-vapplyWrapper <- cmpfun(function (soilID){
-  return(vapply(soilID, FUN=function(x){c(x, lookUp(x))}, 
-                FUN.VALUE=rep(0, times=3), USE.NAMES=FALSE))}) ##streight up complied vapply, this is the one used
+ggplot(data.df) +
+  geom_raster(aes(x=x, y=y, fill=hwsd_SOC_sub.kg_per_m2)) +
+  guides(fill = guide_legend(title = "SOC, 30-100cm [kg m-2]"))
 
-shortDataTable <- vapplyWrapper(unique(dataTable$MU_GLOBAL))
-
-shortDataTable  <- data.frame(t(shortDataTable))
-names(shortDataTable) <- c('MU', 'bulk', 'soc')
-shortDataTable <- rbind(c(0, rep(NA, length=2)), shortDataTable)
-shortDataTable <- rbind(rep(NA, length=3), shortDataTable)
-cat(format(Sys.time(), '%H:%M:%OS3'), 'done\n')
+ggplot(data.df) +
+  geom_raster(aes(x=x, y=y, fill=hwsd_SOC_top.kg_per_m2 + hwsd_SOC_sub.kg_per_m2)) +
+  guides(fill = guide_legend(title = "SOC, 0-100cm [kg m-2]"))
 ```
 
-Then process the raster in chuncks to connect the identifier to bulk density and soil organic carbon.
-```{r regridRaster, cache=TRUE}
-bd_file <- 'outputs/fullBulkDensity.grd'
-soc_file <- 'outputs/fullSOC.grd'
+```{r}
 
-bulk <- raster(hwsd)
-soc <- raster(hwsd)
+sum(data.df$grid_area_km2*(data.df$hwsd_SOC_sub.kg_per_m2 + data.df$hwsd_SOC_top.kg_per_m2)*(1e6/1e12), na.rm=TRUE)
 
-bulk <- writeStart(bulk, file=bd_file, overwrite=TRUE)
-soc <- writeStart(soc, file=soc_file, overwrite=TRUE)
-
-cat(format(Sys.time(), '%H:%M:%OS3'), 'starting to create maps...\n')
-bs <- blockSize(hwsd)
-#cat('going through', bs$n, 'blocks\n')
-for(ii in 1:bs$n){
-  if(ii %% 10 == 0){
-    #cat(ii, '\n')
-    }else{
-      #cat('.')
-      }
-  soilIndex <- getValues(hwsd, row=bs$row[ii], nrows=bs$nrows[ii])
-  soilInfo <- shortDataTable[match(as.vector(soilIndex), shortDataTable$MU),]
-  
-  bulk <- writeValues(bulk, soilInfo$bulk, bs$row[ii])
-  soc <- writeValues(soc, soilInfo$soc, bs$row[ii])
-  }
-
-writeStop(bulk)
-writeStop(soc)
-cat(format(Sys.time(), '%H:%M:%OS3'), 'done\n')
-```
-
-Finally, regrid everything to a 1x1 degree grid cell via area averaging. Note that there are several ways to do regridding and no real agreed upon method. However using a interpolation method to cross several orders of magnitude in grid size is generally not recommended. An alternate method might include aggregating the grid cell by most common type before assigning the bulk densith and soil organic carbon. You are encouraged to use your best scientific judgement in this matter.
-
-```{r regrid, cache=TRUE}
-bulk <- raster(bd_file)
-soc <- raster(soc_file)
-
-bulk.regrid <- aggregate(bulk, fact=120, fun=mean, filename='outputs/bulk_area1deg.grd')
-soc.regrid <- aggregate(soc, fact=120, fun=mean, filename='outputs/soc_area1deg.grd')
-
-writeRaster(soc.regrid, filename='outputs/HWSD_1deg.nc', varname='SOC', varunit='kg m^-2', longname='Area weighted soil organic carbon from HWSD')
-```
-
-```{r visualize, fig.width=10, fig.height=8, cache=TRUE}
-par(mfrow=c(2,2))
-plot(soc, main='SOC on orginal grid')
-plot(soc.regrid, main='SOC on 1 degree grid')
-plot(bulk, main='Bulk density on orginal grid')
-plot(bulk.regrid, main='Bulk density on 1 degree grid')
 ```
