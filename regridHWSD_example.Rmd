@@ -14,7 +14,7 @@ These scripts will download and set up the libraries.
 First let's set up the libraries.
 ```{r setUp}
 library(tidyverse)
-library(Hmisc)
+library(Hmisc) #check that mdb.get tools are installed on your operating systems to connect w/ access db
 library(raster)
 
 source('R/accessHWSD.R')
