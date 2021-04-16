@@ -1,7 +1,7 @@
 ---
 title: "Processing HWSD in R to generate global maps"
 author: "K Todd-Brown (ktoddbrown@gmail.com)"
-date: "April 14 2021"
+date: "2021 April 14"
 output: html_document
 ---
 
@@ -26,35 +26,114 @@ First read in the raster that gives the soil identifier for each grid point.
 ```{r loadRaster, warning=FALSE}
 HWSD <- accessHWSD(downloadFolder = 'temp')
 
-map_lowres <- raster::aggregate(HWSD$raster, fact = 120, fun = modal)
+map_lowres <- raster::aggregate(HWSD$raster, fact = 60, fun = modal)
 soc_map <- makeSOC(map_lowres, HWSD$db, verbose=TRUE)
+
+#while this would be ideal, it broke memory requirements, see block prosessing below
 #soc_map <- makeSOC(HWSD$raster, HWSD$db, verbose=TRUE)
 
 gridSize <- as.data.frame(area(soc_map), xy = TRUE) %>% 
   rename('grid_area_km2' = 'layer')
 ```
 
-
-
 ```{r}
-data.df <- as.data.frame(soc_map, xy=TRUE) %>%
+regrided.df <- as.data.frame(soc_map, xy=TRUE) %>%
   full_join(gridSize, by = c('x', 'y'))
 
-ggplot(data.df) +
+ggplot(regrided.df) +
   geom_raster(aes(x=x, y=y, fill=hwsd_SOC_top.kg_per_m2)) +
-  guides(fill = guide_legend(title = "SOC, 0-30cm [kg m-2]"))
+  guides(fill = guide_legend(title = "SOC,  0- 30cm [kg m-2]")) +
+  scale_fill_distiller(palette = 'YlOrBr', direction = 1, na.value = 'lightblue', values = c(0, .1, .2, .5, 1))+
+  theme_void()
 
-ggplot(data.df) +
+ggplot(regrided.df) +
   geom_raster(aes(x=x, y=y, fill=hwsd_SOC_sub.kg_per_m2)) +
-  guides(fill = guide_legend(title = "SOC, 30-100cm [kg m-2]"))
+  guides(fill = guide_legend(title = "SOC, 30-100cm [kg m-2]")) +
+  scale_fill_distiller(palette = 'YlOrBr', direction = 1, na.value = 'lightblue',  values = c(0, .1, .2, .5, 1))+
+  theme_void()
 
-ggplot(data.df) +
+ggplot(regrided.df) +
   geom_raster(aes(x=x, y=y, fill=hwsd_SOC_top.kg_per_m2 + hwsd_SOC_sub.kg_per_m2)) +
-  guides(fill = guide_legend(title = "SOC, 0-100cm [kg m-2]"))
+  guides(fill = guide_legend(title = "SOC,  0-100cm [kg m-2]")) +
+  scale_fill_distiller(palette = 'YlOrBr', direction = 1, na.value = 'lightblue', values = c(0, .1, .2, .5, 1)) +
+  theme_void()
 ```
+
+
+# Calculate global totals
+
+To compare the global totals between the orginal grip and the regrided using two different SOC calculations methods.
+
+This was very helpful in thinking about blocking rasters
+https://strimas.com/post/processing-large-rasters-in-r/
 
 ```{r}
 
-sum(data.df$grid_area_km2*(data.df$hwsd_SOC_sub.kg_per_m2 + data.df$hwsd_SOC_top.kg_per_m2)*(1e6/1e12), na.rm=TRUE)
+HWSDblocks <- blockSize(HWSD$raster)
+#tic <- system.time(
+HWSDCounts <- plyr::adply(1:HWSDblocks$n, c(1), function(xx){
+  #temp <- table(raster::getValues(HWSD$raster, row = ii, nrows = 1))
+  return(tibble(MU = raster::getValues(HWSD$raster, row = HWSDblocks$row[xx], nrows = HWSDblocks$nrows[xx]),
+                rowIndex = rep(HWSDblocks$row[xx]+ 0:(HWSDblocks$nrows[xx]-1), each = ncol(HWSD$raster))) %>%
+           group_by_all() %>% tally())
+}, .id = 'rowIndex', .parallel = FALSE)
+#) #took about 95 seconds
+
+HWSDArea <- tibble(area_km2 = getValues(area(crop(HWSD$raster, extent(HWSD$raster, 1, nrow(HWSD$raster), 1, 1)))),
+                   rowIndex = 1:nrow(HWSD$raster))
+
+HWSD_MU_SOC <- HWSD$db$HWSD_DATA %>%
+    dplyr::select(ID, #sample id
+                  MU.GLOBAL, #mapping unit
+                  SHARE, #share of maping unit
+                  ISSOIL, #is soil
+                  T.GRAVEL, #total gravel by fraction, top soil
+                  T.BULK.DENSITY, #bulk deinsity in kg/m3, top soil
+                  T.OC, #organic carbon fraction, top soil
+                  S.GRAVEL,  #total gravel by fraction, sub soil
+                  S.BULK.DENSITY, S.OC, 
+                  REF.DEPTH #reference depth
+                  ) %>%
+    dplyr::mutate(S.THICKNESS = if_else(REF.DEPTH > 30, as.numeric(REF.DEPTH - 30), as.numeric(0))/100,
+                  T.THICKNESS = pmin(as.numeric(REF.DEPTH), 30)/100,
+                  SoilFrac = as.numeric(ISSOIL) * as.numeric(SHARE)/100,
+                  T.BD = (as.numeric(T.BULK.DENSITY) * 1e3), #convert kg/dm3 to kg/m3
+                  S.BD = (as.numeric(S.BULK.DENSITY) * 1e3),
+                  T.OC = as.numeric(T.OC)/100, #convert from percent to fraction
+                  S.OC = as.numeric(S.OC)/100,
+                  T.GRAVEL = as.numeric(T.GRAVEL)/100,
+                  S.GRAVEL = as.numeric(S.GRAVEL)/100) %>% 
+    dplyr::group_by(MU.GLOBAL) %>%
+    dplyr::summarise(SOC_top.kg_per_m2 = sum(SoilFrac * T.THICKNESS * T.BD * T.OC * (1 - T.GRAVEL), na.rm=TRUE), 
+      SOC_sub.kg_per_m2 = sum(SoilFrac * S.THICKNESS * S.BD * S.OC * (1 - S.GRAVEL), na.rm=TRUE),
+      SOC_top.kg_per_m2_BDdepthOC = mean(T.THICKNESS * T.BD * T.OC , na.rm=TRUE), 
+      SOC_sub.kg_per_m2_BDdepthOC = mean(S.THICKNESS * S.BD * S.OC , na.rm=TRUE),
+      SoilFrac = sum(SoilFrac)) %>%
+    dplyr::mutate(MU = as.numeric(as.character(MU.GLOBAL))) %>%
+  dplyr::filter(SoilFrac > 0)
+
+HWSD_stocks <- HWSDCounts %>%
+  group_by(MU) %>%
+  full_join(HWSD_MU_SOC, by= 'MU') %>%
+  group_by(rowIndex) %>%
+  full_join(HWSDArea, by = 'rowIndex')
 
 ```
+
+## Orginal grid totals
+
+```{r}
+sum(HWSD_stocks$area_km2*HWSD_stocks$n*(HWSD_stocks$SOC_top.kg_per_m2 + HWSD_stocks$SOC_sub.kg_per_m2)*(1e6/1e12), na.rm=TRUE)
+sum(HWSD_stocks$area_km2*HWSD_stocks$n*(HWSD_stocks$SOC_top.kg_per_m2_BDdepthOC + HWSD_stocks$SOC_sub.kg_per_m2_BDdepthOC)*(1e6/1e12), na.rm=TRUE)
+```
+
+## Regrided totals
+
+```{r}
+
+sum(regrided.df$grid_area_km2*(regrided.df$hwsd_SOC_sub.kg_per_m2 + regrided.df$hwsd_SOC_top.kg_per_m2)*(1e6/1e12), na.rm=TRUE)
+sum(regrided.df$grid_area_km2*(regrided.df$hwsd_SOC_sub.kg_per_m2_BDdepthOC + regrided.df$hwsd_SOC_top.kg_per_m2_BDdepthOC)*(1e6/1e12), na.rm=TRUE)
+
+```
+
+
