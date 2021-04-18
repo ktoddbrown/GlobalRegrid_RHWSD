@@ -12,7 +12,7 @@
 #' @return a ratified raster object with top and sub soil organic carbon stocks
 #' @export
 #'
-#' @importFrom dplyr select mutate group_by summarise rename left_join
+#' @importFrom dplyr select mutate group_by summarise rename left_join if_else
 #' @importFrom tidyr replace_na
 #' @importFrom raster raster
 #' @import magrittr

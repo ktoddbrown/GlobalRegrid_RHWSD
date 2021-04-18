@@ -6,7 +6,7 @@ Date: 2021-04-18
 Author: Kathe Todd-Brown <ktoddbrown@ufl.edu>
 Maintainer: Kathe Todd-Brown <ktoddbrown@ufl.edu>
 Description: More about what it does (maybe more than one line)
-License: MIT
+License: MIT License
 RoxygenNote: 7.1.1
 Imports:
     Hmisc,
