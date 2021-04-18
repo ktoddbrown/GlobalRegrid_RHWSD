@@ -12,3 +12,8 @@ HWSD_vs1_21
 
 *.rtf
 .Rproj.user
+
+.DS_Store
+
+temp/
+output/
