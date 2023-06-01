@@ -1,0 +1,252 @@
+---
+title: "HWSD 2.0"
+author: "Kathe Todd-Brown <ktoddbrown@ufl.edu>"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This is an updated version of HWSD.
+This is currently in draft phase! And needs better documentation
+
+```{r setup}
+library(tidyverse)
+library(Hmisc)
+
+#change this to point to your download directory where you want the HWSD2 files
+downloadDir <- 'temp'
+```
+
+```{r}
+#landing page for the data https://gaez.fao.org/pages/hwsd
+
+if(any(!file.exists(file.path(downloadDir, 'HWSD2', c('HWSD2_DB.zip', 'HWSD2_RASTER.zip', 'HWSD2_TechReport_cc3823en.pdf'))))){ 
+  
+  download.file(url = 'https://s3.eu-west-1.amazonaws.com/data.gaezdev.aws.fao.org/HWSD/HWSD2_DB.zip',
+                destfile = file.path(downloadDir, 'HWSD2', 'HWSD2_DB.zip'))
+  download.file(url = 'https://s3.eu-west-1.amazonaws.com/data.gaezdev.aws.fao.org/HWSD/HWSD2_RASTER.zip',
+                destfile = file.path(downloadDir, 'HWSD2', 'HWSD2_RASTER.zip'))
+  download.file('https://www.fao.org/3/cc3823en/cc3823en.pdf',
+                destfile = file.path(downloadDir, 'HWSD2', 'HWSD2_TechReport_cc3823en.pdf'))
+  
+  # unzip downloaded files with data in it
+    unzip(file.path(downloadDir, 'HWSD2', 'HWSD2_DB.zip'), exdir = file.path(downloadDir, 'HWSD2'))
+    unzip(file.path(downloadDir, 'HWSD2', 'HWSD2_RASTER.zip'), exdir = file.path(downloadDir, 'HWSD2', 'raster'))
+    
+    # read in the MS Access database; this code requires the Hmisc package and likely won't run on windows machiens
+    #...code does not like the ` (` in the file name so process from downloads
+    #HWSD_mdb <- Hmisc::mdb.get(file.path('~/Downloads', 'HWSD2.mdb'))
+    HWSD_mdb <- Hmisc::mdb.get(file.path(downloadDir, 'HWSD2', 'HWSD2.mdb'))
+    
+      temp <- lapply(names(HWSD_mdb), function(tablename){
+        readr::write_csv(HWSD_mdb[[tablename]], 
+                         file.path(downloadDir, 'HWSD2', paste0(tablename, '.csv')))
+        return(file.path(downloadDir, 'HWSD2', paste0(tablename, '.csv')))
+      })
+    
+    # read in the raster
+    #HWSD_raster <- raster::raster(file.path(downloadDir, 'HWSD2', 'raster', 'HWSD2.bil'))
+  
+}
+
+```
+
+```{r}
+
+#taken from Davidson etal 2006
+organics_density <- 1.4 #g cm-3
+mineral_density <- 2.65 #g cm-3
+cToOrganics <- 0.58 #g-C g-organics-1
+
+if(any(!file.exists(c(HWSD2_soc_raster_filename,
+                      HWSD2_porosity_raster_filename,
+                      HWSD2_landFrac_raster_filename,
+                      HWSD2_MU_layerkey_filename,
+                      HWSD2_MU_key_filename,
+                      HWSD2_MU_raster_filename)))){
+  HWSD_layers <- read_csv(file = file.path(downloadDir, 'HWSD2', 'HWSD2_LAYERS.csv'),
+                          show_col_types = FALSE) %>%
+    dplyr::select(ID, HWSD2.SMU.ID, SEQUENCE, LAYER, 
+                  SHARE, #Percent, Share in Soil Mapping Unit
+                  TOPDEP, BOTDEP, #cm, top and bottom depth of the layer
+                  COARSE, #% volume, Coarse fragments
+                  ##BULK DENSITY (g/cm3). Bulk density is defined as “the mass of the many particles of the material divided by the total volume they occupy”. Data are directly available in the WISE30sec database. 
+                  ## REFERENCE BULK DENSITY (g/cm3). Reference bulk density is a property of particulate materials. It is the mass of many particles of the material divided by the volume they occupy. The volume includes the space between particles as well as the space inside the pores of individual particles. The calculation procedures are in: http://www.pedosphere.com/resources/bulkdensity/index.html.
+                  REF.BULK, # g cm-3, reference bulk density
+                  BULK, # g cm-3, bulk density
+                  ORG.CARBON # % weight, Organic Carbon Content
+    ) %>%
+    mutate(across(COARSE:ORG.CARBON, ~ if_else(. < 0, NA, .))) %>%
+    mutate(THICKNESS = BOTDEP - TOPDEP,
+           SoilFrac = SHARE/100, #convert from percent to fraction
+           OC = ORG.CARBON/100, #convert from percent to fraction
+           COARSE = COARSE/100 #convert from percent to fraction
+    ) %>%
+    mutate( ###Calculate proosity
+      porosity = (1 - BULK / 
+                    ( organics_density * OC / cToOrganics + 
+                        mineral_density * (1 - OC / cToOrganics))) *
+        #correction for coarse fraction
+        #figure 1 here: https://escholarship.org/content/qt12k087qs/qt12k087qs.pdf
+        (1-COARSE),
+      porosity_ref = (1 - REF.BULK / 
+                        ( organics_density * OC / cToOrganics + 
+                            mineral_density * (1 - OC / cToOrganics))) *
+        #correction for coarse fraction
+        #figure 1 here: https://escholarship.org/content/qt12k087qs/qt12k087qs.pdf
+        (1-COARSE),
+      SOC = BULK * OC * (1 - COARSE),
+      SOC_ref = REF.BULK * OC * (1 - COARSE) 
+    ) 
+  
+  write_csv(HWSD_layers, file = HWSD2_MU_layerkey_filename)
+  
+  HWSD_site <- HWSD_layers %>%
+    filter(is.finite(SOC+porosity)) %>%
+    filter(TOPDEP < 100) %>%
+    mutate(BOTDEP = if_else(BOTDEP > 100, 100, BOTDEP)) %>%
+    mutate(THICKNESS = BOTDEP - TOPDEP) %>%
+    reframe(porosity_volFrac = sum(THICKNESS * porosity)/ sum(THICKNESS),
+            porosity_ref_volFrac = sum(THICKNESS * porosity_ref)/ sum( THICKNESS),
+            depth = sum(THICKNESS) ,
+            SOC = sum(THICKNESS * SOC), # g cm-2
+            SOC_ref = sum( THICKNESS * SOC_ref), #g cm-2
+            .by = c(HWSD2.SMU.ID, SEQUENCE, SoilFrac)) %>%
+    reframe(porosity_volFrac = sum(porosity_volFrac * SoilFrac)/sum(SoilFrac),
+            porosity_ref_volFrac = sum(porosity_ref_volFrac * SoilFrac)/sum(SoilFrac),
+            depth = sum(depth * SoilFrac)/sum(SoilFrac),
+            SOC = sum(SOC * SoilFrac)/sum(SoilFrac) *  10, #kg m-2
+            SOC_ref = sum(SOC_ref * SoilFrac)/sum(SoilFrac) *  10, #kg m-2
+            soil_frac = sum(SoilFrac),
+            .by = c(HWSD2.SMU.ID))
+  
+  #write the mapping unit information
+  write_csv(HWSD_site, file = HWSD2_MU_key_filename)
+  
+}
+  
+```
+
+```{r}
+  
+  ##Create the SOC and porosity raster files from the HWSD2,
+  ##Also create an area map using the soil_frac
+  soil_raster <- ratify(raster(HWSD2_MU_raster_filename))
+  rat <- levels(soil_raster)[[1]]
+  rat <- rat %>% left_join(HWSD_site, by = c('ID' = "HWSD2.SMU.ID"))
+  levels(soil_raster) <- rat
+  
+  #plot(deratify(soil_raster, att = 'SOC'))
+  soc.rst <- deratify(soil_raster, att = 'SOC', 
+                      filename = HWSD2_soc_raster_filename,
+                      overwrite=TRUE)
+  #ref porosity is negative, use the other one
+  porosity.rst <- deratify(soil_raster, att = 'porosity_volFrac', 
+                           filename =  HWSD2_porosity_raster_filename,
+                      overwrite=TRUE)
+  soilFrac.rst <- deratify(soil_raster, att = 'soil_frac', 
+                           filename = HWSD2_landFrac_raster_filename,
+                      overwrite=TRUE)
+  
+
+
+```
+
+```{r}
+
+ggplot(read_csv(file = HWSD2_MU_layerkey_filename, 
+                show_col_types = FALSE) %>%
+         pivot_longer(cols = TOPDEP:ORG.CARBON)) +
+  geom_histogram(aes(x=value)) +
+  facet_wrap(~name, scales = 'free')
+
+ggplot(read_csv(file = HWSD2_MU_key_filename,
+                show_col_types = FALSE) %>%
+         pivot_longer(cols = -HWSD2.SMU.ID)) +
+  geom_histogram(aes(x=value)) +
+  facet_wrap(~name, scales = 'free')
+
+ggplot(read_csv(file = HWSD2_MU_layerkey_filename,
+                show_col_types = FALSE)) +
+  geom_hex(aes(x=REF.BULK, y = BULK), bins = 100) +
+  xlim(0, 2.25) + ylim(0, 2.25) +
+  geom_abline(intercept = 0, slope =1 )
+
+```
+
+```{r}
+#par(mfrow = c(2,2))
+plot(raster(HWSD2_soc_raster_filename), main = 'HWSD2 SOC [kg m-2]')
+plot(raster(HWSD2_porosity_raster_filename), main = 'HWSD2 porosity [m3 m-3]')
+plot(raster(HWSD2_landFrac_raster_filename), main = 'HWSD2 soil fraction [ m2 m-2]')
+
+```
+
+```{r checkHWSD2}
+if(!file.exists(HWSD2_totals_filename)){
+  area_map <- raster(area_map_filename)
+  soil_raster <- raster(HWSD2_soc_raster_filename)
+  land_frac <- raster(HWSD2_landFrac_raster_filename)
+  chunks <- blockSize(area_map)
+  
+  soc <- 0
+  land_area <- 0
+  
+  for(ii in seq_along(chunks$row)){
+    if(ii %% 10 == 1){
+      print(paste(ii, 'of',chunks$n, ':', Sys.time()))
+    }
+    
+    soc <- soc + sum(
+      getValues(
+        soil_raster, row = chunks$row[ii], nrows = chunks$nrows[ii]) *
+        getValues(
+          land_frac, row = chunks$row[ii], nrows = chunks$nrows[ii]) *
+        getValues(
+          area_map, row = chunks$row[ii], nrows = chunks$nrows[ii]),
+      na.rm=TRUE)
+    
+    land_area <- land_area + 
+      sum(
+        getValues(
+          land_frac, row = chunks$row[ii], nrows = chunks$nrows[ii]) *
+        getValues(
+          area_map, row = chunks$row[ii], nrows = chunks$nrows[ii]), na.rm=TRUE)
+  }
+  
+  print(paste(ii, 'of',chunks$n, ':', Sys.time()))
+  
+  write_csv(data.frame(Soil_Pg = soc * 1e-6, #convert [k / m2 * km2] to [Pg]
+                       landarea_1e6km2 = land_area*1e-6),
+            file = HWSD2_totals_filename)
+}
+
+read_csv(HWSD2_totals_filename)
+```
+
+```{r}
+
+metadata <- metadata %>%
+  bind_rows(
+    data.frame(
+      filename = c(HWSD2_MU_key_filename,
+                   HWSD2_MU_raster_filename,
+                   HWSD2_porosity_raster_filename,
+                   HWSD2_soc_raster_filename,
+                   HWSD2_landFrac_raster_filename,
+                   HWSD2_totals_filename),
+      variable = c('Maping unit',
+                   'Mapping unit key',
+                   'Soil porosity [0-100 cm]',
+                   'Soil organic carbon stocks [0-100 cm]',
+                   'Soil land area fraction',
+                   'Total SOC and land area'), 
+      units = c('unitless', 
+                'NA', 
+                'vol-pore per vol-soil', 
+                'kg m-2', 
+                'm2 m-2', 
+                'NA'),
+      description = 'Trimmed to NPP from HWSD2'
+      )
+    )
+```
